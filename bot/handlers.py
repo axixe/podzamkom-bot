@@ -39,6 +39,7 @@ from bot.services.user_service import (
     submit_user_photos,
     update_or_create_user_control_message,
 )
+from bot.services.vk_service import VkUploadError, upload_approved_photo_to_vk
 from bot.storage import DataStore
 from bot.utils import normalize_username, now_iso
 
@@ -367,6 +368,16 @@ class BotHandlers:
                 await self._finalize_existing_message(query, status_emoji)
                 await show_or_create_admin_home(context, query.message.chat_id, self.store)
                 return
+
+            if action == "approve":
+                try:
+                    await upload_approved_photo_to_vk(context, item["file_id"])
+                except VkUploadError as e:
+                    await query.answer(f"Ошибка загрузки в VK: {e}", show_alert=True)
+                    return
+                except Exception:
+                    await query.answer("Непредвиденная ошибка при загрузке фото в VK.", show_alert=True)
+                    return
 
             item["status"] = "approved" if action == "approve" else "rejected"
             item["reviewed_at"] = now_iso()
