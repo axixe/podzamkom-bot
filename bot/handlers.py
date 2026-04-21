@@ -253,8 +253,16 @@ class BotHandlers:
         if payload == "manager_add_save":
             flow = context.user_data.get("employee_flow", {})
             if flow.get("mode") != "add" or flow.get("step") != "confirm":
-                await query.answer("Добавление неактивно.", show_alert=True)
-                return
+                recovered = self._recover_add_flow_from_confirmation_text(query.message.text or "")
+                if not recovered:
+                    await query.answer("Добавление неактивно.", show_alert=True)
+                    return
+                flow = {
+                    "mode": "add",
+                    "step": "confirm",
+                    "username": recovered["username"],
+                    "display_name": recovered["display_name"],
+                }
 
             try:
                 employee = self.store.create_employee(
@@ -377,6 +385,29 @@ class BotHandlers:
     async def _render_employee_card(self, query, employee_id: int, period: str) -> None:
         text = build_employee_card_text(self.store, employee_id, period)
         await query.edit_message_text(text=text, reply_markup=employee_card_keyboard(employee_id, period))
+
+    def _recover_add_flow_from_confirmation_text(self, text: str) -> dict[str, str | None] | None:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        username_line = next((line for line in lines if line.lower().startswith("username:")), None)
+        name_line = next((line for line in lines if line.lower().startswith("имя:")), None)
+        if not username_line:
+            return None
+
+        raw_username = username_line.split(":", 1)[1].strip()
+        username = normalize_username(raw_username)
+        if not username:
+            return None
+
+        display_name: str | None = None
+        if name_line:
+            raw_name = name_line.split(":", 1)[1].strip()
+            if raw_name and raw_name.lower() != "не указано":
+                display_name = raw_name
+
+        return {
+            "username": username,
+            "display_name": display_name,
+        }
 
     async def _finalize_existing_message(self, query, status_emoji: str) -> None:
         try:
