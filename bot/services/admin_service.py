@@ -59,12 +59,39 @@ async def ensure_admin_chat_id(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def show_or_create_admin_home(context: ContextTypes.DEFAULT_TYPE, chat_id: int, store: DataStore) -> None:
+    await _upsert_admin_home_message(context, chat_id, store, recreate=False)
+
+
+async def recreate_admin_home(context: ContextTypes.DEFAULT_TYPE, chat_id: int, store: DataStore) -> None:
+    await _upsert_admin_home_message(context, chat_id, store, recreate=True)
+
+
+async def _upsert_admin_home_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    store: DataStore,
+    recreate: bool,
+) -> None:
     data = store.load_data()
     text = build_admin_home_text(data)
     has_pending = any(item["status"] in {"pending", "in_review"} for item in data["queue"])
     markup = admin_home_keyboard(has_pending=has_pending)
 
     admin_home_message_id = data.get("admin_home_message_id")
+
+    if admin_home_message_id and not recreate:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=admin_home_message_id,
+                text=text,
+                reply_markup=markup,
+            )
+            return
+        except BadRequest as e:
+            logger.warning("Не удалось обновить admin home message: %s", e)
+        except Exception as e:
+            logger.warning("Ошибка при обновлении admin home message: %s", e)
 
     if admin_home_message_id:
         try:
@@ -108,7 +135,7 @@ async def send_next_photo_to_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: 
     item = store.get_next_reviewable_item(data)
 
     if not item:
-        await show_or_create_admin_home(context, chat_id, store)
+        await recreate_admin_home(context, chat_id, store)
         return
 
     item["status"] = "in_review"
@@ -121,5 +148,3 @@ async def send_next_photo_to_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: 
         caption=f"Фото от {item['from_username']}",
         reply_markup=moderation_keyboard(item["id"]),
     )
-
-    await show_or_create_admin_home(context, chat_id, store)
