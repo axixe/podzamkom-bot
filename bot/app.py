@@ -10,5 +10,5 @@ def create_application() -> Application:
         raise ValueError("Укажи BOT_TOKEN в переменных окружения или .env файле.")
 
     app = Application.builder().token(settings.bot_token).build()
-    register_handlers(app, DataStore(settings.data_file))
+    register_handlers(app, DataStore(settings.data_file, settings.sqlite_file))
     return app
