@@ -14,6 +14,7 @@ from bot.services.admin_service import (
     ensure_admin_chat_id,
     is_admin,
     is_allowed,
+    recreate_admin_home,
     send_next_photo_to_admin,
     show_or_create_admin_home,
 )
@@ -141,7 +142,7 @@ class BotHandlers:
             except Exception:
                 pass
 
-            await show_or_create_admin_home(context, query.message.chat_id, self.store)
+            await recreate_admin_home(context, query.message.chat_id, self.store)
             return
 
         if payload == "admin_go_review":
