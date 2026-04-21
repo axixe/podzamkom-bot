@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from telegram.constants import ParseMode
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
@@ -9,6 +10,7 @@ from bot.keyboards import admin_home_keyboard, moderation_keyboard
 from bot.logging_config import logger
 from bot.storage import DataStore
 from bot.utils import is_same_day, normalize_username, now_iso
+from bot.services.employee_service import format_employee_display_html
 
 
 def is_admin(username: str | None) -> bool:
@@ -138,9 +140,12 @@ async def send_next_photo_to_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: 
     item["review_started_at"] = now_iso()
     store.save_data(data)
 
+    employee = store.get_employee_by_id(item.get("employee_id")) if item.get("employee_id") else None
+    caption_author = format_employee_display_html(employee) if employee else store.resolve_item_employee_label(item)
     await context.bot.send_photo(
         chat_id=chat_id,
         photo=item["file_id"],
-        caption=f"Фото от {store.resolve_item_employee_label(item)}",
+        caption=f"Фото от {caption_author}",
+        parse_mode=ParseMode.HTML,
         reply_markup=moderation_keyboard(item["id"]),
     )

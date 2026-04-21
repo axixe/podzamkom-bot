@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta
+from html import escape
 from typing import Any
 
 from bot.storage import DataStore
@@ -52,6 +53,16 @@ def format_employee_display(employee: dict[str, Any] | None) -> str:
     if username:
         return username
     return "Неизвестный сотрудник"
+
+
+def format_employee_display_html(employee: dict[str, Any] | None) -> str:
+    if not employee:
+        return "Неизвестный сотрудник"
+    display_name = (employee.get("display_name") or "").strip()
+    username = normalize_username(employee.get("username"))
+    if display_name and username:
+        return f'<a href="https://t.me/{username.lstrip("@")}">{escape(display_name)}</a>'
+    return escape(format_employee_display(employee))
 
 
 def ensure_employee_identity(store: DataStore, telegram_user_id: int, username: str | None) -> dict[str, Any] | None:
@@ -126,20 +137,21 @@ def build_employee_manager_text(store: DataStore, period: str) -> str:
 
 def build_employee_card_text(store: DataStore, employee_id: int, period: str) -> str:
     employee = store.get_employee_by_id(employee_id)
-    if not employee or not employee.get("is_active"):
+    if not employee:
         return "Сотрудник не найден."
 
     stats = employee_stats(store, period, employee_id=employee_id)
     username = normalize_username(employee.get("username")) or "не указан"
     tg_id = employee.get("telegram_user_id")
     linked = "привязан" if tg_id else "не привязан"
+    active_status = "активен" if employee.get("is_active") else "деактивирован"
 
     return (
         "Карточка сотрудника\n\n"
         f"Имя: {employee.get('display_name') or 'не указано'}\n"
         f"Username: {username}\n"
         f"Telegram user id: {tg_id or 'не указан'}\n"
-        f"Статус: {linked}\n\n"
+        f"Статус: {linked}, {active_status}\n\n"
         f"Период: {period_label(period)}\n"
         f"Фото всего: {stats['total']}\n"
         f"Одобрено: {stats['approved']}\n"

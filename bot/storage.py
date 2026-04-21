@@ -126,23 +126,32 @@ class DataStore:
             raise RuntimeError("Не удалось создать сотрудника")
         return employee
 
-    def count_active_employees(self) -> int:
+    def count_employees(self, include_inactive: bool = False) -> int:
+        query = "SELECT COUNT(*) AS cnt FROM employees"
+        if not include_inactive:
+            query += " WHERE is_active = 1"
+
         with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS cnt FROM employees WHERE is_active = 1").fetchone()
+            row = conn.execute(query).fetchone()
         return int(row["cnt"] if row else 0)
 
-    def list_active_employees(self, offset: int = 0, limit: int = 10) -> list[dict[str, Any]]:
+    def list_employees(self, offset: int = 0, limit: int = 10, include_inactive: bool = False) -> list[dict[str, Any]]:
+        query = """
+            SELECT * FROM employees
+            {where_clause}
+            ORDER BY COALESCE(display_name, username, '') COLLATE NOCASE, id ASC
+            LIMIT ? OFFSET ?
+        """
+        where_clause = "" if include_inactive else "WHERE is_active = 1"
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM employees
-                WHERE is_active = 1
-                ORDER BY COALESCE(display_name, username, '') COLLATE NOCASE, id ASC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            ).fetchall()
+            rows = conn.execute(query.format(where_clause=where_clause), (limit, offset)).fetchall()
         return [self._row_to_employee(row) for row in rows if row]
+
+    def count_active_employees(self) -> int:
+        return self.count_employees(include_inactive=False)
+
+    def list_active_employees(self, offset: int = 0, limit: int = 10) -> list[dict[str, Any]]:
+        return self.list_employees(offset=offset, limit=limit, include_inactive=False)
 
     def get_employee_by_id(self, employee_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:

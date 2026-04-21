@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 from typing import Any
 
 from telegram import Update
@@ -43,6 +44,7 @@ from bot.utils import normalize_username, now_iso
 
 
 EMPLOYEE_PAGE_SIZE = 8
+UPLOAD_DENIED_NOTIFY_COOLDOWN = timedelta(seconds=30)
 
 
 class BotHandlers:
@@ -75,13 +77,18 @@ class BotHandlers:
         user = update.effective_user
 
         if not is_allowed(self.store, user.id, user.username):
-            await update.message.reply_text("У тебя нет доступа к загрузке фото.")
+            now = datetime.now()
+            last_notified = context.user_data.get("upload_access_denied_at")
+            if not isinstance(last_notified, datetime) or now - last_notified >= UPLOAD_DENIED_NOTIFY_COOLDOWN:
+                await update.message.reply_text("У тебя нет доступа к загрузке фото.")
+                context.user_data["upload_access_denied_at"] = now
             return
 
         if not update.message.photo:
             return
 
         file_id = update.message.photo[-1].file_id
+        context.user_data.pop("upload_access_denied_at", None)
         data = self.store.load_data()
         draft = self.store.get_user_draft(data, user.id, user.username)
         draft["photos"].append(file_id)
@@ -204,8 +211,17 @@ class BotHandlers:
 
         if payload.startswith("manager_delete:"):
             employee_id = int(payload.split(":", 1)[1])
+            employee = self.store.get_employee_by_id(employee_id)
             self.store.deactivate_employee(employee_id)
-            await query.edit_message_text("Сотрудник деактивирован.")
+            if employee and employee.get("telegram_user_id"):
+                try:
+                    await context.bot.send_message(
+                        chat_id=employee["telegram_user_id"],
+                        text="Ваш доступ к боту был деактивирован администратором.",
+                    )
+                except Exception:
+                    pass
+            await self._render_employee_list(query, page=0, include_inactive=True)
             return
 
         if payload.startswith("manager_edit_name:"):
@@ -290,6 +306,7 @@ class BotHandlers:
             new_name = None if text == "-" else text
             self.store.update_employee_name(employee_id, new_name)
             context.user_data.pop("employee_flow", None)
+            await update.message.reply_text("Имя сотрудника было изменено.")
             await update.message.reply_text(
                 text=build_employee_card_text(self.store, employee_id, period),
                 reply_markup=employee_card_keyboard(employee_id, period),
@@ -332,18 +349,28 @@ class BotHandlers:
         text = build_employee_manager_text(self.store, period)
         await query.edit_message_text(text=text, reply_markup=employee_manager_keyboard(period))
 
-    async def _render_employee_list(self, query, page: int) -> None:
-        total = self.store.count_active_employees()
+    async def _render_employee_list(self, query, page: int, include_inactive: bool = False) -> None:
+        total = self.store.count_employees(include_inactive=include_inactive)
         offset = max(0, page) * EMPLOYEE_PAGE_SIZE
-        employees = self.store.list_active_employees(offset=offset, limit=EMPLOYEE_PAGE_SIZE + 1)
+        employees = self.store.list_employees(
+            offset=offset,
+            limit=EMPLOYEE_PAGE_SIZE + 1,
+            include_inactive=include_inactive,
+        )
         has_next = len(employees) > EMPLOYEE_PAGE_SIZE
         current = employees[:EMPLOYEE_PAGE_SIZE]
 
-        items = [(employee["id"], format_employee_display(employee)) for employee in current]
+        items = []
+        for employee in current:
+            title = format_employee_display(employee)
+            if not employee.get("is_active"):
+                title = f"🚫 {title}"
+            items.append((employee["id"], title))
         has_prev = page > 0
 
+        title = "Выберите сотрудника" if not include_inactive else "Список всех сотрудников"
         await query.edit_message_text(
-            text=f"Выберите сотрудника\n\nВсего активных: {total}",
+            text=f"{title}\n\nВсего: {total}",
             reply_markup=employee_list_keyboard(items, page, has_prev=has_prev, has_next=has_next),
         )
 
