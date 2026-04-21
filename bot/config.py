@@ -34,6 +34,7 @@ class Settings:
     admin_username: str
     whitelist: set[str]
     data_file: Path
+    sqlite_file: Path
 
 
 settings = Settings(
@@ -45,4 +46,5 @@ settings = Settings(
         if username.strip()
     },
     data_file=Path(os.getenv("DATA_FILE", "bot_data.json")),
+    sqlite_file=Path(os.getenv("SQLITE_FILE", "bot_data.sqlite3")),
 )

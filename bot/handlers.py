@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from typing import Any
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -10,6 +13,12 @@ from telegram.ext import (
     filters,
 )
 
+from bot.keyboards import (
+    add_employee_confirm_keyboard,
+    employee_card_keyboard,
+    employee_list_keyboard,
+    employee_manager_keyboard,
+)
 from bot.services.admin_service import (
     ensure_admin_chat_id,
     is_admin,
@@ -18,6 +27,12 @@ from bot.services.admin_service import (
     send_next_photo_to_admin,
     show_or_create_admin_home,
 )
+from bot.services.employee_service import (
+    build_employee_card_text,
+    build_employee_manager_text,
+    format_employee_display,
+    normalize_period,
+)
 from bot.services.user_service import (
     clear_user_photos,
     submit_user_photos,
@@ -25,6 +40,9 @@ from bot.services.user_service import (
 )
 from bot.storage import DataStore
 from bot.utils import normalize_username, now_iso
+
+
+EMPLOYEE_PAGE_SIZE = 8
 
 
 class BotHandlers:
@@ -41,7 +59,7 @@ class BotHandlers:
             await show_or_create_admin_home(context, update.effective_chat.id, self.store)
             return
 
-        if not is_allowed(update.effective_user.username):
+        if not is_allowed(self.store, update.effective_user.id, update.effective_user.username):
             await update.message.reply_text("У тебя нет доступа к этому боту.")
             return
 
@@ -56,7 +74,7 @@ class BotHandlers:
 
         user = update.effective_user
 
-        if not is_allowed(user.username):
+        if not is_allowed(self.store, user.id, user.username):
             await update.message.reply_text("У тебя нет доступа к загрузке фото.")
             return
 
@@ -87,10 +105,12 @@ class BotHandlers:
         username = normalize_username(update.effective_user.username)
 
         if is_admin(username):
+            if await self._handle_admin_text_flow(update, context):
+                return
             await show_or_create_admin_home(context, update.effective_chat.id, self.store)
             return
 
-        if is_allowed(update.effective_user.username):
+        if is_allowed(self.store, update.effective_user.id, update.effective_user.username):
             await update.message.reply_text(
                 "Просто отправь фото. После этого бот покажет кнопки отправки и очистки."
             )
@@ -158,8 +178,77 @@ class BotHandlers:
             await show_or_create_admin_home(context, query.message.chat_id, self.store)
             return
 
-        if payload == "admin_add_employee":
-            await query.answer("Функцию добавим позже.")
+        if payload == "admin_employee_manager":
+            await self._render_employee_manager(query, period="day")
+            return
+
+        if payload.startswith("manager_period:"):
+            period = normalize_period(payload.split(":", 1)[1])
+            await self._render_employee_manager(query, period=period)
+            return
+
+        if payload.startswith("manager_list:"):
+            page = int(payload.split(":", 1)[1])
+            await self._render_employee_list(query, page)
+            return
+
+        if payload.startswith("manager_employee:"):
+            _, employee_id_raw, period_raw = payload.split(":", 2)
+            await self._render_employee_card(query, int(employee_id_raw), normalize_period(period_raw))
+            return
+
+        if payload.startswith("manager_employee_period:"):
+            _, employee_id_raw, period_raw = payload.split(":", 2)
+            await self._render_employee_card(query, int(employee_id_raw), normalize_period(period_raw))
+            return
+
+        if payload.startswith("manager_delete:"):
+            employee_id = int(payload.split(":", 1)[1])
+            self.store.deactivate_employee(employee_id)
+            await query.edit_message_text("Сотрудник деактивирован.")
+            return
+
+        if payload.startswith("manager_edit_name:"):
+            employee_id = int(payload.split(":", 1)[1])
+            context.user_data["employee_flow"] = {"mode": "edit_name", "employee_id": employee_id}
+            await query.edit_message_text("Введи новое имя (display_name). Можно отправить '-' чтобы очистить.")
+            return
+
+        if payload == "manager_add_start":
+            context.user_data["employee_flow"] = {"mode": "add", "step": "username"}
+            await query.edit_message_text("Шаг 1/3. Введи username сотрудника (например, @axixe).")
+            return
+
+        if payload == "manager_add_back":
+            flow = context.user_data.get("employee_flow", {})
+            if flow.get("mode") == "add":
+                flow["step"] = "display_name"
+                context.user_data["employee_flow"] = flow
+                await query.edit_message_text("Шаг 2/3. Введи display_name (или '-' чтобы оставить пустым).")
+            return
+
+        if payload == "manager_add_cancel":
+            context.user_data.pop("employee_flow", None)
+            await self._render_employee_manager(query, period="day")
+            return
+
+        if payload == "manager_add_save":
+            flow = context.user_data.get("employee_flow", {})
+            if flow.get("mode") != "add" or flow.get("step") != "confirm":
+                await query.answer("Добавление неактивно.", show_alert=True)
+                return
+
+            try:
+                employee = self.store.create_employee(
+                    username=flow["username"],
+                    display_name=flow.get("display_name"),
+                )
+            except sqlite3.IntegrityError:
+                await query.answer("Такой username уже существует.", show_alert=True)
+                return
+
+            context.user_data.pop("employee_flow", None)
+            await query.edit_message_text(f"Сотрудник сохранен: {format_employee_display(employee)}")
             return
 
         if payload.startswith("approve:") or payload.startswith("reject:"):
@@ -185,6 +274,76 @@ class BotHandlers:
 
             await self._finalize_existing_message(query, status_emoji)
             await send_next_photo_to_admin(context, query.message.chat_id, self.store)
+
+    async def _handle_admin_text_flow(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        flow = context.user_data.get("employee_flow")
+        if not flow:
+            return False
+
+        text = (update.message.text or "").strip()
+
+        if flow.get("mode") == "edit_name":
+            employee_id = int(flow["employee_id"])
+            new_name = None if text == "-" else text
+            self.store.update_employee_name(employee_id, new_name)
+            context.user_data.pop("employee_flow", None)
+            await update.message.reply_text("Имя сотрудника обновлено.")
+            return True
+
+        if flow.get("mode") != "add":
+            return False
+
+        if flow.get("step") == "username":
+            normalized_username = normalize_username(text)
+            if not normalized_username or not text.startswith("@"):
+                await update.message.reply_text("Username должен начинаться с @. Попробуй снова.")
+                return True
+
+            if self.store.get_active_employee_by_username(normalized_username):
+                await update.message.reply_text("Такой username уже есть среди активных сотрудников.")
+                return True
+
+            flow["username"] = normalized_username
+            flow["step"] = "display_name"
+            context.user_data["employee_flow"] = flow
+            await update.message.reply_text("Шаг 2/3. Введи display_name (или '-' чтобы оставить пустым).")
+            return True
+
+        if flow.get("step") == "display_name":
+            flow["display_name"] = None if text == "-" else text
+            flow["step"] = "confirm"
+            context.user_data["employee_flow"] = flow
+            pretty_name = flow["display_name"] or "не указано"
+            await update.message.reply_text(
+                f"Подтверждение:\nUsername: {flow['username']}\nИмя: {pretty_name}",
+                reply_markup=add_employee_confirm_keyboard(),
+            )
+            return True
+
+        return False
+
+    async def _render_employee_manager(self, query, period: str) -> None:
+        text = build_employee_manager_text(self.store, period)
+        await query.edit_message_text(text=text, reply_markup=employee_manager_keyboard(period))
+
+    async def _render_employee_list(self, query, page: int) -> None:
+        total = self.store.count_active_employees()
+        offset = max(0, page) * EMPLOYEE_PAGE_SIZE
+        employees = self.store.list_active_employees(offset=offset, limit=EMPLOYEE_PAGE_SIZE + 1)
+        has_next = len(employees) > EMPLOYEE_PAGE_SIZE
+        current = employees[:EMPLOYEE_PAGE_SIZE]
+
+        items = [(employee["id"], format_employee_display(employee)) for employee in current]
+        has_prev = page > 0
+
+        await query.edit_message_text(
+            text=f"Выберите сотрудника\n\nВсего активных: {total}",
+            reply_markup=employee_list_keyboard(items, page, has_prev=has_prev, has_next=has_next),
+        )
+
+    async def _render_employee_card(self, query, employee_id: int, period: str) -> None:
+        text = build_employee_card_text(self.store, employee_id, period)
+        await query.edit_message_text(text=text, reply_markup=employee_card_keyboard(employee_id, period))
 
     async def _finalize_existing_message(self, query, status_emoji: str) -> None:
         try:

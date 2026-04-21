@@ -15,12 +15,8 @@ def is_admin(username: str | None) -> bool:
     return normalize_username(username) == normalize_username(settings.admin_username)
 
 
-def is_allowed(username: str | None) -> bool:
-    normalized = normalize_username(username)
-    if not normalized:
-        return False
-    whitelist_normalized = {normalize_username(x) for x in settings.whitelist}
-    return normalized in whitelist_normalized
+def is_allowed(store: DataStore, telegram_user_id: int, username: str | None) -> bool:
+    return store.resolve_employee_identity(telegram_user_id, username) is not None
 
 
 def build_admin_home_text(data: dict) -> str:
@@ -111,7 +107,7 @@ async def _upsert_admin_home_message(
 
 async def notify_admin_new_photos(
     context: ContextTypes.DEFAULT_TYPE,
-    from_username: str,
+    from_employee_title: str,
     count: int,
     store: DataStore,
 ) -> None:
@@ -124,7 +120,7 @@ async def notify_admin_new_photos(
 
     await context.bot.send_message(
         chat_id=admin_chat_id,
-        text=(f"Пользователь {from_username} загрузил новые фото.\n" f"Количество: {count}"),
+        text=(f"Новые фото от {from_employee_title}.\n" f"Количество: {count}"),
     )
 
     await show_or_create_admin_home(context, admin_chat_id, store)
@@ -145,6 +141,6 @@ async def send_next_photo_to_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: 
     await context.bot.send_photo(
         chat_id=chat_id,
         photo=item["file_id"],
-        caption=f"Фото от {item['from_username']}",
+        caption=f"Фото от {store.resolve_item_employee_label(item)}",
         reply_markup=moderation_keyboard(item["id"]),
     )
