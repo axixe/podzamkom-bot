@@ -209,8 +209,10 @@ class BotHandlers:
             return
 
         if payload.startswith("manager_edit_name:"):
-            employee_id = int(payload.split(":", 1)[1])
-            context.user_data["employee_flow"] = {"mode": "edit_name", "employee_id": employee_id}
+            _, employee_id_raw, period_raw = payload.split(":", 2)
+            employee_id = int(employee_id_raw)
+            period = normalize_period(period_raw)
+            context.user_data["employee_flow"] = {"mode": "edit_name", "employee_id": employee_id, "period": period}
             await query.edit_message_text("Введи новое имя (display_name). Можно отправить '-' чтобы очистить.")
             return
 
@@ -284,10 +286,14 @@ class BotHandlers:
 
         if flow.get("mode") == "edit_name":
             employee_id = int(flow["employee_id"])
+            period = normalize_period(flow.get("period"))
             new_name = None if text == "-" else text
             self.store.update_employee_name(employee_id, new_name)
             context.user_data.pop("employee_flow", None)
-            await update.message.reply_text("Имя сотрудника обновлено.")
+            await update.message.reply_text(
+                text=build_employee_card_text(self.store, employee_id, period),
+                reply_markup=employee_card_keyboard(employee_id, period),
+            )
             return True
 
         if flow.get("mode") != "add":

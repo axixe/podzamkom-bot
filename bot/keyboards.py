@@ -67,7 +67,7 @@ def employee_list_keyboard(items: list[tuple[int, str]], page: int, has_prev: bo
 def employee_card_keyboard(employee_id: int, period: str) -> InlineKeyboardMarkup:
     rows = [
         _period_row(f"manager_employee_period:{employee_id}", period),
-        [InlineKeyboardButton("Редактировать имя", callback_data=f"manager_edit_name:{employee_id}")],
+        [InlineKeyboardButton("Редактировать имя", callback_data=f"manager_edit_name:{employee_id}:{period}")],
         [InlineKeyboardButton("Удалить сотрудника", callback_data=f"manager_delete:{employee_id}")],
         [InlineKeyboardButton("Назад", callback_data="manager_list:0")],
     ]
