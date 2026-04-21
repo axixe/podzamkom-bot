@@ -234,6 +234,7 @@ class BotHandlers:
 
         if payload == "manager_add_start":
             context.user_data["employee_flow"] = {"mode": "add", "step": "username"}
+            self._set_persistent_add_draft(user.id, None)
             await query.edit_message_text("Шаг 1/3. Введи username сотрудника (например, @axixe).")
             return
 
@@ -247,22 +248,41 @@ class BotHandlers:
 
         if payload == "manager_add_cancel":
             context.user_data.pop("employee_flow", None)
+            self._set_persistent_add_draft(user.id, None)
             await self._render_employee_manager(query, period="day")
             return
 
         if payload == "manager_add_save":
             flow = context.user_data.get("employee_flow", {})
+            if flow.get("mode") == "add" and flow.get("step") == "confirm":
+                self._set_persistent_add_draft(
+                    user.id,
+                    {
+                        "username": flow.get("username"),
+                        "display_name": flow.get("display_name"),
+                    },
+                )
+
+            persistent_draft = self._get_persistent_add_draft(user.id)
             if flow.get("mode") != "add" or flow.get("step") != "confirm":
                 recovered = self._recover_add_flow_from_confirmation_text(query.message.text or "")
-                if not recovered:
+                if recovered:
+                    flow = {
+                        "mode": "add",
+                        "step": "confirm",
+                        "username": recovered["username"],
+                        "display_name": recovered["display_name"],
+                    }
+                elif persistent_draft:
+                    flow = {
+                        "mode": "add",
+                        "step": "confirm",
+                        "username": persistent_draft.get("username"),
+                        "display_name": persistent_draft.get("display_name"),
+                    }
+                else:
                     await query.answer("Добавление неактивно.", show_alert=True)
                     return
-                flow = {
-                    "mode": "add",
-                    "step": "confirm",
-                    "username": recovered["username"],
-                    "display_name": recovered["display_name"],
-                }
 
             try:
                 employee = self.store.create_employee(
@@ -274,6 +294,7 @@ class BotHandlers:
                 return
 
             context.user_data.pop("employee_flow", None)
+            self._set_persistent_add_draft(user.id, None)
             await query.edit_message_text(f"Сотрудник сохранен: {format_employee_display(employee)}")
             return
 
@@ -344,6 +365,13 @@ class BotHandlers:
             flow["display_name"] = None if text == "-" else text
             flow["step"] = "confirm"
             context.user_data["employee_flow"] = flow
+            self._set_persistent_add_draft(
+                update.effective_user.id,
+                {
+                    "username": flow.get("username"),
+                    "display_name": flow.get("display_name"),
+                },
+            )
             pretty_name = flow["display_name"] or "не указано"
             await update.message.reply_text(
                 f"Подтверждение:\nUsername: {flow['username']}\nИмя: {pretty_name}",
@@ -408,6 +436,32 @@ class BotHandlers:
             "username": username,
             "display_name": display_name,
         }
+
+    def _set_persistent_add_draft(self, admin_user_id: int, draft: dict[str, str | None] | None) -> None:
+        data = self.store.load_data()
+        drafts = data.setdefault("employee_add_drafts", {})
+        key = str(admin_user_id)
+        if draft is None:
+            drafts.pop(key, None)
+        else:
+            drafts[key] = draft
+        self.store.save_data(data)
+
+    def _get_persistent_add_draft(self, admin_user_id: int) -> dict[str, str | None] | None:
+        data = self.store.load_data()
+        drafts = data.setdefault("employee_add_drafts", {})
+        raw = drafts.get(str(admin_user_id))
+        if not isinstance(raw, dict):
+            return None
+        username = normalize_username(raw.get("username"))
+        if not username:
+            return None
+        display_name = raw.get("display_name")
+        if isinstance(display_name, str):
+            display_name = display_name.strip() or None
+        else:
+            display_name = None
+        return {"username": username, "display_name": display_name}
 
     async def _finalize_existing_message(self, query, status_emoji: str) -> None:
         try:
