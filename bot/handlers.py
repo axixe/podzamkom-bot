@@ -20,7 +20,6 @@ from bot.keyboards import (
     employee_list_keyboard,
     employee_manager_keyboard,
 )
-from bot.logging_config import logger
 from bot.services.admin_service import (
     ensure_admin_chat_id,
     is_admin,
@@ -44,7 +43,7 @@ from bot.storage import DataStore
 from bot.utils import normalize_username, now_iso
 
 
-EMPLOYEE_PAGE_SIZE = 8
+EMPLOYEE_PAGE_SIZE = 5
 UPLOAD_DENIED_NOTIFY_COOLDOWN = timedelta(seconds=30)
 
 
@@ -133,13 +132,6 @@ class BotHandlers:
         user = query.from_user
         username = normalize_username(user.username)
         payload = query.data or ""
-        logger.info(
-            "callback received: payload=%s user_id=%s username=%s chat_id=%s",
-            payload,
-            user.id,
-            username,
-            query.message.chat_id if query.message else None,
-        )
 
         await ensure_admin_chat_id(update, context, self.store)
 
@@ -203,22 +195,50 @@ class BotHandlers:
             return
 
         if payload.startswith("manager_list:"):
-            page = int(payload.split(":", 1)[1])
-            await self._render_employee_list(query, page)
+            mode, page = self._parse_list_payload(payload)
+            await self._render_employee_list(query, page=page, mode=mode)
+            return
+
+        if payload == "manager_noop":
             return
 
         if payload.startswith("manager_employee:"):
-            _, employee_id_raw, period_raw = payload.split(":", 2)
-            await self._render_employee_card(query, int(employee_id_raw), normalize_period(period_raw))
+            parts = payload.split(":")
+            if len(parts) == 3:
+                _, employee_id_raw, period_raw = parts
+                mode_raw = "active"
+                page_raw = "0"
+            else:
+                _, employee_id_raw, mode_raw, page_raw, period_raw = payload.split(":", 4)
+            await self._render_employee_card(
+                query,
+                int(employee_id_raw),
+                normalize_period(period_raw),
+                mode=mode_raw,
+                page=int(page_raw),
+            )
             return
 
         if payload.startswith("manager_employee_period:"):
-            _, employee_id_raw, period_raw = payload.split(":", 2)
-            await self._render_employee_card(query, int(employee_id_raw), normalize_period(period_raw))
+            parts = payload.split(":")
+            if len(parts) == 3:
+                _, employee_id_raw, period_raw = parts
+                mode_raw = "active"
+                page_raw = "0"
+            else:
+                _, employee_id_raw, mode_raw, page_raw, period_raw = payload.split(":", 4)
+            await self._render_employee_card(
+                query,
+                int(employee_id_raw),
+                normalize_period(period_raw),
+                mode=mode_raw,
+                page=int(page_raw),
+            )
             return
 
         if payload.startswith("manager_delete:"):
-            employee_id = int(payload.split(":", 1)[1])
+            _, employee_id_raw, mode_raw, page_raw = payload.split(":", 3)
+            employee_id = int(employee_id_raw)
             employee = self.store.get_employee_by_id(employee_id)
             self.store.deactivate_employee(employee_id)
             if employee and employee.get("telegram_user_id"):
@@ -229,14 +249,20 @@ class BotHandlers:
                     )
                 except Exception:
                     pass
-            await self._render_employee_list(query, page=0, include_inactive=True)
+            await self._render_employee_list(query, page=int(page_raw), mode=mode_raw)
             return
 
         if payload.startswith("manager_edit_name:"):
-            _, employee_id_raw, period_raw = payload.split(":", 2)
+            _, employee_id_raw, mode_raw, page_raw, period_raw = payload.split(":", 4)
             employee_id = int(employee_id_raw)
             period = normalize_period(period_raw)
-            context.user_data["employee_flow"] = {"mode": "edit_name", "employee_id": employee_id, "period": period}
+            context.user_data["employee_flow"] = {
+                "mode": "edit_name",
+                "employee_id": employee_id,
+                "period": period,
+                "list_mode": mode_raw,
+                "list_page": int(page_raw),
+            }
             await query.edit_message_text("Введи новое имя (display_name). Можно отправить '-' чтобы очистить.")
             return
 
@@ -262,7 +288,6 @@ class BotHandlers:
 
         if payload == "manager_add_save":
             flow = context.user_data.get("employee_flow", {})
-            logger.info("manager_add_save clicked, in-memory flow=%s", flow)
             if flow.get("mode") == "add" and flow.get("step") == "confirm":
                 self._set_persistent_add_draft(
                     user.id,
@@ -273,10 +298,8 @@ class BotHandlers:
                 )
 
             persistent_draft = self._get_persistent_add_draft(user.id)
-            logger.info("manager_add_save persistent draft=%s", persistent_draft)
             if flow.get("mode") != "add" or flow.get("step") != "confirm":
                 recovered = self._recover_add_flow_from_confirmation_text(query.message.text or "")
-                logger.info("manager_add_save recovered from message=%s", recovered)
                 if recovered:
                     flow = {
                         "mode": "add",
@@ -292,27 +315,34 @@ class BotHandlers:
                         "display_name": persistent_draft.get("display_name"),
                     }
                 else:
-                    logger.warning("manager_add_save no active flow and no recoverable draft")
                     await query.answer("Добавление неактивно.", show_alert=True)
                     return
 
             try:
-                logger.info(
-                    "manager_add_save creating employee with username=%s display_name=%s",
-                    flow.get("username"),
-                    flow.get("display_name"),
-                )
                 employee = self.store.create_employee(
                     username=flow["username"],
                     display_name=flow.get("display_name"),
                 )
-                logger.info("manager_add_save created employee id=%s", employee.get("id"))
             except sqlite3.IntegrityError:
-                logger.exception("manager_add_save failed: duplicate username=%s", flow.get("username"))
+                existing_employee = self.store.get_employee_by_username(flow.get("username"))
+                if existing_employee and not existing_employee.get("is_active"):
+                    self.store.reactivate_employee(
+                        employee_id=existing_employee["id"],
+                        display_name=flow.get("display_name"),
+                    )
+                    employee = self.store.get_employee_by_id(existing_employee["id"])
+                    if not employee:
+                        await query.answer("Не удалось реактивировать сотрудника.", show_alert=True)
+                        return
+                    context.user_data.pop("employee_flow", None)
+                    self._set_persistent_add_draft(user.id, None)
+                    await query.edit_message_text(
+                        f"Сотрудник был реактивирован: {format_employee_display(employee)}"
+                    )
+                    return
                 await query.answer("Такой username уже существует.", show_alert=True)
                 return
             except Exception:
-                logger.exception("manager_add_save unexpected error")
                 await query.answer("Ошибка сохранения сотрудника. Проверь логи.", show_alert=True)
                 return
 
@@ -355,13 +385,15 @@ class BotHandlers:
         if flow.get("mode") == "edit_name":
             employee_id = int(flow["employee_id"])
             period = normalize_period(flow.get("period"))
+            list_mode = flow.get("list_mode", "active")
+            list_page = int(flow.get("list_page", 0))
             new_name = None if text == "-" else text
             self.store.update_employee_name(employee_id, new_name)
             context.user_data.pop("employee_flow", None)
             await update.message.reply_text("Имя сотрудника было изменено.")
             await update.message.reply_text(
                 text=build_employee_card_text(self.store, employee_id, period),
-                reply_markup=employee_card_keyboard(employee_id, period),
+                reply_markup=employee_card_keyboard(employee_id, period, mode=list_mode, page=list_page),
             )
             return True
 
@@ -408,14 +440,15 @@ class BotHandlers:
         text = build_employee_manager_text(self.store, period)
         await query.edit_message_text(text=text, reply_markup=employee_manager_keyboard(period))
 
-    async def _render_employee_list(self, query, page: int, include_inactive: bool = False) -> None:
-        total = self.store.count_employees(include_inactive=include_inactive)
+    async def _render_employee_list(self, query, page: int, mode: str = "active") -> None:
         offset = max(0, page) * EMPLOYEE_PAGE_SIZE
-        employees = self.store.list_employees(
-            offset=offset,
-            limit=EMPLOYEE_PAGE_SIZE + 1,
-            include_inactive=include_inactive,
-        )
+        if mode == "inactive":
+            total = self.store.count_inactive_employees()
+            employees = self.store.list_inactive_employees(offset=offset, limit=EMPLOYEE_PAGE_SIZE + 1)
+        else:
+            total = self.store.count_active_employees()
+            employees = self.store.list_active_employees(offset=offset, limit=EMPLOYEE_PAGE_SIZE + 1)
+
         has_next = len(employees) > EMPLOYEE_PAGE_SIZE
         current = employees[:EMPLOYEE_PAGE_SIZE]
 
@@ -427,15 +460,26 @@ class BotHandlers:
             items.append((employee["id"], title))
         has_prev = page > 0
 
-        title = "Выберите сотрудника" if not include_inactive else "Список всех сотрудников"
+        total_pages = (total + EMPLOYEE_PAGE_SIZE - 1) // EMPLOYEE_PAGE_SIZE if total else 1
+        title = "Выберите сотрудника" if mode == "active" else "Деактивированные сотрудники"
         await query.edit_message_text(
             text=f"{title}\n\nВсего: {total}",
-            reply_markup=employee_list_keyboard(items, page, has_prev=has_prev, has_next=has_next),
+            reply_markup=employee_list_keyboard(
+                items=items,
+                mode=mode,
+                page=page,
+                total_pages=total_pages,
+                has_prev=has_prev,
+                has_next=has_next,
+            ),
         )
 
-    async def _render_employee_card(self, query, employee_id: int, period: str) -> None:
+    async def _render_employee_card(self, query, employee_id: int, period: str, mode: str = "active", page: int = 0) -> None:
         text = build_employee_card_text(self.store, employee_id, period)
-        await query.edit_message_text(text=text, reply_markup=employee_card_keyboard(employee_id, period))
+        await query.edit_message_text(
+            text=text,
+            reply_markup=employee_card_keyboard(employee_id, period, mode=mode, page=page),
+        )
 
     def _recover_add_flow_from_confirmation_text(self, text: str) -> dict[str, str | None] | None:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -466,10 +510,8 @@ class BotHandlers:
         key = str(admin_user_id)
         if draft is None:
             drafts.pop(key, None)
-            logger.info("persistent add draft cleared for admin_user_id=%s", admin_user_id)
         else:
             drafts[key] = draft
-            logger.info("persistent add draft set for admin_user_id=%s draft=%s", admin_user_id, draft)
         self.store.save_data(data)
 
     def _get_persistent_add_draft(self, admin_user_id: int) -> dict[str, str | None] | None:
@@ -477,20 +519,35 @@ class BotHandlers:
         drafts = data.setdefault("employee_add_drafts", {})
         raw = drafts.get(str(admin_user_id))
         if not isinstance(raw, dict):
-            logger.info("persistent add draft missing for admin_user_id=%s", admin_user_id)
             return None
         username = normalize_username(raw.get("username"))
         if not username:
-            logger.warning("persistent add draft invalid username for admin_user_id=%s raw=%s", admin_user_id, raw)
             return None
         display_name = raw.get("display_name")
         if isinstance(display_name, str):
             display_name = display_name.strip() or None
         else:
             display_name = None
-        draft = {"username": username, "display_name": display_name}
-        logger.info("persistent add draft loaded for admin_user_id=%s draft=%s", admin_user_id, draft)
-        return draft
+        return {"username": username, "display_name": display_name}
+
+    @staticmethod
+    def _parse_list_payload(payload: str) -> tuple[str, int]:
+        parts = payload.split(":")
+        if len(parts) == 2:
+            try:
+                return "active", int(parts[1])
+            except ValueError:
+                return "active", 0
+        if len(parts) >= 3:
+            mode = parts[1]
+            if mode not in {"active", "inactive"}:
+                mode = "active"
+            try:
+                page = int(parts[2])
+            except ValueError:
+                page = 0
+            return mode, page
+        return "active", 0
 
     async def _finalize_existing_message(self, query, status_emoji: str) -> None:
         try:

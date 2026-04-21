@@ -108,16 +108,9 @@ class DataStore:
     def create_employee(self, username: str, display_name: str | None) -> dict[str, Any]:
         normalized_username = normalize_username(username)
         if not normalized_username:
-            logger.warning("create_employee called with invalid username=%s", username)
             raise ValueError("Username обязателен")
 
         timestamp = now_iso()
-        logger.info(
-            "create_employee insert attempt username=%s display_name=%s telegram_user_id=%s",
-            normalized_username,
-            display_name,
-            None,
-        )
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -130,9 +123,7 @@ class DataStore:
             row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
         employee = self._row_to_employee(row)
         if not employee:
-            logger.error("create_employee inserted row id=%s but fetch returned empty", employee_id)
             raise RuntimeError("Не удалось создать сотрудника")
-        logger.info("create_employee success id=%s username=%s", employee["id"], employee["username"])
         return employee
 
     def count_employees(self, include_inactive: bool = False) -> int:
@@ -162,6 +153,24 @@ class DataStore:
     def list_active_employees(self, offset: int = 0, limit: int = 10) -> list[dict[str, Any]]:
         return self.list_employees(offset=offset, limit=limit, include_inactive=False)
 
+    def count_inactive_employees(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS cnt FROM employees WHERE is_active = 0").fetchone()
+        return int(row["cnt"] if row else 0)
+
+    def list_inactive_employees(self, offset: int = 0, limit: int = 10) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM employees
+                WHERE is_active = 0
+                ORDER BY COALESCE(display_name, username, '') COLLATE NOCASE, id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        return [self._row_to_employee(row) for row in rows if row]
+
     def get_employee_by_id(self, employee_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
@@ -186,6 +195,17 @@ class DataStore:
             ).fetchone()
         return self._row_to_employee(row)
 
+    def get_employee_by_username(self, username: str | None) -> dict[str, Any] | None:
+        normalized_username = normalize_username(username)
+        if not normalized_username:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM employees WHERE username = ?",
+                (normalized_username,),
+            ).fetchone()
+        return self._row_to_employee(row)
+
     def update_employee_name(self, employee_id: int, display_name: str | None) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -199,6 +219,19 @@ class DataStore:
                 "UPDATE employees SET is_active = 0, updated_at = ? WHERE id = ?",
                 (now_iso(), employee_id),
             )
+
+    def reactivate_employee(self, employee_id: int, display_name: str | None = None) -> None:
+        with self._connect() as conn:
+            if display_name is None:
+                conn.execute(
+                    "UPDATE employees SET is_active = 1, updated_at = ? WHERE id = ?",
+                    (now_iso(), employee_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE employees SET is_active = 1, display_name = ?, updated_at = ? WHERE id = ?",
+                    (display_name, now_iso(), employee_id),
+                )
 
     def resolve_employee_identity(self, telegram_user_id: int, username: str | None) -> dict[str, Any] | None:
         normalized_username = normalize_username(username)
