@@ -56,7 +56,7 @@ class BotHandlers:
 
         if is_admin(username):
             await update.message.reply_text("Привет.\n\nТы админ этого бота.")
-            await show_or_create_admin_home(context, update.effective_chat.id, self.store)
+            await recreate_admin_home(context, update.effective_chat.id, self.store)
             return
 
         if not is_allowed(self.store, update.effective_user.id, update.effective_user.username):
@@ -107,7 +107,7 @@ class BotHandlers:
         if is_admin(username):
             if await self._handle_admin_text_flow(update, context):
                 return
-            await show_or_create_admin_home(context, update.effective_chat.id, self.store)
+            await recreate_admin_home(context, update.effective_chat.id, self.store)
             return
 
         if is_allowed(self.store, update.effective_user.id, update.effective_user.username):
