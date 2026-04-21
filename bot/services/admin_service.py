@@ -68,17 +68,14 @@ async def show_or_create_admin_home(context: ContextTypes.DEFAULT_TYPE, chat_id:
 
     if admin_home_message_id:
         try:
-            await context.bot.edit_message_text(
+            await context.bot.delete_message(
                 chat_id=chat_id,
                 message_id=admin_home_message_id,
-                text=text,
-                reply_markup=markup,
             )
-            return
         except BadRequest as e:
-            logger.warning("Не удалось обновить admin home message: %s", e)
+            logger.warning("Не удалось удалить старое admin home message: %s", e)
         except Exception as e:
-            logger.warning("Ошибка при обновлении admin home message: %s", e)
+            logger.warning("Ошибка при удалении старого admin home message: %s", e)
 
     sent = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
     data["admin_home_message_id"] = sent.message_id

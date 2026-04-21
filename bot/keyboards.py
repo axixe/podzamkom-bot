@@ -11,14 +11,13 @@ def user_action_keyboard() -> InlineKeyboardMarkup:
 
 
 def admin_home_keyboard(has_pending: bool) -> InlineKeyboardMarkup:
-    review_callback = "admin_go_review" if has_pending else "admin_go_review_empty"
+    rows = []
 
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Перейти к проверке", callback_data=review_callback)],
-            [InlineKeyboardButton("Добавить сотрудника", callback_data="admin_add_employee")],
-        ]
-    )
+    if has_pending:
+        rows.append([InlineKeyboardButton("Перейти к проверке", callback_data="admin_go_review")])
+
+    rows.append([InlineKeyboardButton("Добавить сотрудника", callback_data="admin_add_employee")])
+    return InlineKeyboardMarkup(rows)
 
 
 def moderation_keyboard(item_id: int) -> InlineKeyboardMarkup:
