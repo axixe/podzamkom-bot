@@ -1,0 +1,45 @@
+{
+  "drafts": {
+    "6704726367": {
+      "username": "@asyncr0",
+      "photos": [],
+      "control_message_chat_id": null,
+      "control_message_id": null
+    }
+  },
+  "queue": [
+    {
+      "id": 1,
+      "from_user_id": 6704726367,
+      "from_username": "@asyncr0",
+      "file_id": "AgACAgIAAxkBAAMGaeci9Z0IXHgjtr-MQni4VHiMLeQAAmsVaxuK5kFLfxhVh1ArIzsBAAMCAAN4AAM7BA",
+      "status": "rejected",
+      "created_at": "2026-04-21T11:21:06.771341",
+      "review_started_at": "2026-04-21T11:21:10.513470",
+      "reviewed_at": "2026-04-21T11:21:27.534694"
+    },
+    {
+      "id": 2,
+      "from_user_id": 6704726367,
+      "from_username": "@asyncr0",
+      "file_id": "AgACAgIAAxkBAAMHaeci9bj_RrZdIehcijCyOzule-YAAmwVaxuK5kFLkMcQh3HHauABAAMCAAN5AAM7BA",
+      "status": "approved",
+      "created_at": "2026-04-21T11:21:06.771356",
+      "review_started_at": "2026-04-21T11:21:16.972270",
+      "reviewed_at": "2026-04-21T11:21:29.226116"
+    },
+    {
+      "id": 3,
+      "from_user_id": 6704726367,
+      "from_username": "@asyncr0",
+      "file_id": "AgACAgIAAxkBAAMUaecjX8KndgTQFGNhYaKTK4bOcf0AAm4VaxuK5kFLPgtmx3eqva8BAAMCAANtAAM7BA",
+      "status": "approved",
+      "created_at": "2026-04-21T11:21:06.771360",
+      "review_started_at": "2026-04-21T11:21:19.854033",
+      "reviewed_at": "2026-04-21T11:21:30.443018"
+    }
+  ],
+  "admin_chat_id": 5221706553,
+  "admin_home_message_id": 178,
+  "last_item_id": 3
+}
