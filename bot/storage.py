@@ -108,9 +108,16 @@ class DataStore:
     def create_employee(self, username: str, display_name: str | None) -> dict[str, Any]:
         normalized_username = normalize_username(username)
         if not normalized_username:
+            logger.warning("create_employee called with invalid username=%s", username)
             raise ValueError("Username обязателен")
 
         timestamp = now_iso()
+        logger.info(
+            "create_employee insert attempt username=%s display_name=%s telegram_user_id=%s",
+            normalized_username,
+            display_name,
+            None,
+        )
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -123,7 +130,9 @@ class DataStore:
             row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
         employee = self._row_to_employee(row)
         if not employee:
+            logger.error("create_employee inserted row id=%s but fetch returned empty", employee_id)
             raise RuntimeError("Не удалось создать сотрудника")
+        logger.info("create_employee success id=%s username=%s", employee["id"], employee["username"])
         return employee
 
     def count_employees(self, include_inactive: bool = False) -> int:

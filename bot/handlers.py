@@ -20,6 +20,7 @@ from bot.keyboards import (
     employee_list_keyboard,
     employee_manager_keyboard,
 )
+from bot.logging_config import logger
 from bot.services.admin_service import (
     ensure_admin_chat_id,
     is_admin,
@@ -132,6 +133,13 @@ class BotHandlers:
         user = query.from_user
         username = normalize_username(user.username)
         payload = query.data or ""
+        logger.info(
+            "callback received: payload=%s user_id=%s username=%s chat_id=%s",
+            payload,
+            user.id,
+            username,
+            query.message.chat_id if query.message else None,
+        )
 
         await ensure_admin_chat_id(update, context, self.store)
 
@@ -254,6 +262,7 @@ class BotHandlers:
 
         if payload == "manager_add_save":
             flow = context.user_data.get("employee_flow", {})
+            logger.info("manager_add_save clicked, in-memory flow=%s", flow)
             if flow.get("mode") == "add" and flow.get("step") == "confirm":
                 self._set_persistent_add_draft(
                     user.id,
@@ -264,8 +273,10 @@ class BotHandlers:
                 )
 
             persistent_draft = self._get_persistent_add_draft(user.id)
+            logger.info("manager_add_save persistent draft=%s", persistent_draft)
             if flow.get("mode") != "add" or flow.get("step") != "confirm":
                 recovered = self._recover_add_flow_from_confirmation_text(query.message.text or "")
+                logger.info("manager_add_save recovered from message=%s", recovered)
                 if recovered:
                     flow = {
                         "mode": "add",
@@ -281,16 +292,28 @@ class BotHandlers:
                         "display_name": persistent_draft.get("display_name"),
                     }
                 else:
+                    logger.warning("manager_add_save no active flow and no recoverable draft")
                     await query.answer("Добавление неактивно.", show_alert=True)
                     return
 
             try:
+                logger.info(
+                    "manager_add_save creating employee with username=%s display_name=%s",
+                    flow.get("username"),
+                    flow.get("display_name"),
+                )
                 employee = self.store.create_employee(
                     username=flow["username"],
                     display_name=flow.get("display_name"),
                 )
+                logger.info("manager_add_save created employee id=%s", employee.get("id"))
             except sqlite3.IntegrityError:
+                logger.exception("manager_add_save failed: duplicate username=%s", flow.get("username"))
                 await query.answer("Такой username уже существует.", show_alert=True)
+                return
+            except Exception:
+                logger.exception("manager_add_save unexpected error")
+                await query.answer("Ошибка сохранения сотрудника. Проверь логи.", show_alert=True)
                 return
 
             context.user_data.pop("employee_flow", None)
@@ -443,8 +466,10 @@ class BotHandlers:
         key = str(admin_user_id)
         if draft is None:
             drafts.pop(key, None)
+            logger.info("persistent add draft cleared for admin_user_id=%s", admin_user_id)
         else:
             drafts[key] = draft
+            logger.info("persistent add draft set for admin_user_id=%s draft=%s", admin_user_id, draft)
         self.store.save_data(data)
 
     def _get_persistent_add_draft(self, admin_user_id: int) -> dict[str, str | None] | None:
@@ -452,16 +477,20 @@ class BotHandlers:
         drafts = data.setdefault("employee_add_drafts", {})
         raw = drafts.get(str(admin_user_id))
         if not isinstance(raw, dict):
+            logger.info("persistent add draft missing for admin_user_id=%s", admin_user_id)
             return None
         username = normalize_username(raw.get("username"))
         if not username:
+            logger.warning("persistent add draft invalid username for admin_user_id=%s raw=%s", admin_user_id, raw)
             return None
         display_name = raw.get("display_name")
         if isinstance(display_name, str):
             display_name = display_name.strip() or None
         else:
             display_name = None
-        return {"username": username, "display_name": display_name}
+        draft = {"username": username, "display_name": display_name}
+        logger.info("persistent add draft loaded for admin_user_id=%s draft=%s", admin_user_id, draft)
+        return draft
 
     async def _finalize_existing_message(self, query, status_emoji: str) -> None:
         try:
