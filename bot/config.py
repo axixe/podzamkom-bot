@@ -35,6 +35,10 @@ class Settings:
     whitelist: set[str]
     data_file: Path
     sqlite_file: Path
+    vk_token: str | None
+    vk_group_id: int | None
+    vk_album_id: int | None
+    vk_api_version: str
 
 
 settings = Settings(
@@ -47,4 +51,8 @@ settings = Settings(
     },
     data_file=Path(os.getenv("DATA_FILE", "bot_data.json")),
     sqlite_file=Path(os.getenv("SQLITE_FILE", "bot_data.sqlite3")),
+    vk_token=os.getenv("VK_TOKEN"),
+    vk_group_id=int(os.getenv("VK_GROUP_ID")) if os.getenv("VK_GROUP_ID") else None,
+    vk_album_id=int(os.getenv("VK_ALBUM_ID")) if os.getenv("VK_ALBUM_ID") else None,
+    vk_api_version=os.getenv("VK_API_VERSION", "5.199"),
 )

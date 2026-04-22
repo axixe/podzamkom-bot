@@ -39,6 +39,7 @@ from bot.services.user_service import (
     submit_user_photos,
     update_or_create_user_control_message,
 )
+from bot.services.vk_service import upload_approved_photo_to_vk
 from bot.storage import DataStore
 from bot.utils import normalize_username, now_iso
 
@@ -182,6 +183,32 @@ class BotHandlers:
             return
 
         if payload == "admin_go_review_empty":
+            await show_or_create_admin_home(context, query.message.chat_id, self.store)
+            return
+
+        if payload == "publish_selected":
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+            await self._publish_selected_items(context, query.message.chat_id)
+            await recreate_admin_home(context, query.message.chat_id, self.store)
+            return
+
+        if payload == "cancel_selected":
+            data = self.store.load_data()
+            for item in data["queue"]:
+                if item["status"] == "selected":
+                    item["status"] = "pending"
+                    item["review_started_at"] = None
+            self.store.save_data(data)
+
+            try:
+                await query.edit_message_text("Публикация отменена. Отобранные фото возвращены в очередь.")
+            except Exception:
+                pass
+
             await show_or_create_admin_home(context, query.message.chat_id, self.store)
             return
 
@@ -368,12 +395,51 @@ class BotHandlers:
                 await show_or_create_admin_home(context, query.message.chat_id, self.store)
                 return
 
-            item["status"] = "approved" if action == "approve" else "rejected"
-            item["reviewed_at"] = now_iso()
+            item["status"] = "selected" if action == "approve" else "rejected"
+            if action == "reject":
+                item["reviewed_at"] = now_iso()
             self.store.save_data(data)
 
             await self._finalize_existing_message(query, status_emoji)
             await send_next_photo_to_admin(context, query.message.chat_id, self.store)
+
+
+    async def _publish_selected_items(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> tuple[int, int]:
+        data = self.store.load_data()
+        selected_items = [item for item in data["queue"] if item["status"] == "selected"]
+
+        published = 0
+        failed = 0
+
+        for item in selected_items:
+            try:
+                await upload_approved_photo_to_vk(context, item["file_id"])
+            except Exception:
+                failed += 1
+                continue
+
+            item["status"] = "approved"
+            item["reviewed_at"] = now_iso()
+            published += 1
+
+        self.store.save_data(data)
+
+        if failed:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "Публикация завершена с ошибками.\n"
+                    f"Успешно опубликовано: {published}\n"
+                    f"Не удалось опубликовать: {failed}"
+                ),
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"Публикация завершена. Опубликовано фото: {published}",
+            )
+
+        return published, failed
 
     async def _handle_admin_text_flow(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         flow = context.user_data.get("employee_flow")

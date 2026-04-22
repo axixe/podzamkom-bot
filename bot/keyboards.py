@@ -39,6 +39,19 @@ def moderation_keyboard(item_id: int) -> InlineKeyboardMarkup:
     )
 
 
+
+
+def publish_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🟢 Опубликовать", callback_data="publish_selected"),
+                InlineKeyboardButton("🔴 Отменить", callback_data="cancel_selected"),
+            ]
+        ]
+    )
+
+
 def employee_manager_keyboard(period: str) -> InlineKeyboardMarkup:
     rows = [
         _period_row("manager_period", period),

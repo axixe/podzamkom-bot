@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from telegram.constants import ParseMode
-from telegram import Update
+from telegram import InputMediaPhoto, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from bot.config import settings
-from bot.keyboards import admin_home_keyboard, moderation_keyboard
+from bot.keyboards import admin_home_keyboard, moderation_keyboard, publish_confirm_keyboard
 from bot.logging_config import logger
 from bot.storage import DataStore
 from bot.utils import is_same_day, normalize_username, now_iso
@@ -24,6 +24,7 @@ def is_allowed(store: DataStore, telegram_user_id: int, username: str | None) ->
 def build_admin_home_text(data: dict) -> str:
     pending_now = sum(1 for item in data["queue"] if item["status"] == "pending")
     in_review_now = sum(1 for item in data["queue"] if item["status"] == "in_review")
+    selected_now = sum(1 for item in data["queue"] if item["status"] == "selected")
 
     total_today = sum(1 for item in data["queue"] if is_same_day(item.get("created_at")))
     approved_today = sum(
@@ -37,7 +38,8 @@ def build_admin_home_text(data: dict) -> str:
 
     return (
         "Главная админа\n\n"
-        f"На проверке сейчас: {pending_now + in_review_now}\n\n"
+        f"На проверке сейчас: {pending_now + in_review_now}\n"
+        f"Отобрано к публикации: {selected_now}\n\n"
         f"За сегодня всего: {total_today}\n"
         f"За сегодня одобрено: {approved_today}\n"
         f"За сегодня отклонено: {rejected_today}"
@@ -128,11 +130,37 @@ async def notify_admin_new_photos(
     await show_or_create_admin_home(context, admin_chat_id, store)
 
 
+async def send_selected_publish_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: int, store: DataStore) -> bool:
+    data = store.load_data()
+    selected_items = [item for item in data["queue"] if item["status"] == "selected"]
+    if not selected_items:
+        return False
+
+    batch_size = 10
+    for start in range(0, len(selected_items), batch_size):
+        chunk = selected_items[start:start + batch_size]
+        media = [InputMediaPhoto(media=item["file_id"]) for item in chunk]
+        await context.bot.send_media_group(chat_id=chat_id, media=media)
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "Ты отобрал фото для публикации.\n"
+            f"Всего к публикации: {len(selected_items)}\n\n"
+            "Уверен, что их нужно опубликовать?"
+        ),
+        reply_markup=publish_confirm_keyboard(),
+    )
+    return True
+
+
 async def send_next_photo_to_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, store: DataStore) -> None:
     data = store.load_data()
     item = store.get_next_reviewable_item(data)
 
     if not item:
+        if await send_selected_publish_confirmation(context, chat_id, store):
+            return
         await recreate_admin_home(context, chat_id, store)
         return
 
