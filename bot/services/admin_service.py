@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from telegram.constants import ParseMode
-from telegram import Update
+from telegram import InputMediaPhoto, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -135,6 +135,12 @@ async def send_selected_publish_confirmation(context: ContextTypes.DEFAULT_TYPE,
     selected_items = [item for item in data["queue"] if item["status"] == "selected"]
     if not selected_items:
         return False
+
+    batch_size = 10
+    for start in range(0, len(selected_items), batch_size):
+        chunk = selected_items[start:start + batch_size]
+        media = [InputMediaPhoto(media=item["file_id"]) for item in chunk]
+        await context.bot.send_media_group(chat_id=chat_id, media=media)
 
     await context.bot.send_message(
         chat_id=chat_id,
